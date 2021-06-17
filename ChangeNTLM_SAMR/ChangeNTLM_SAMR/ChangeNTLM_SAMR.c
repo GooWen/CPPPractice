@@ -128,7 +128,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 	ENCRYPTED_NT_OWF_PASSWORD NewNtEncryptedWithOldNt;
 	ENCRYPTED_LM_OWF_PASSWORD NewLMEncryptedWithNewNT;
 
-
+	// init a Samr connect handle
 	status = SamrConnect5(uServerName, SAM_SERVER_CONNECT | SAM_SERVER_ENUMERATE_DOMAINS | SAM_SERVER_LOOKUP_DOMAIN, 1, &inRevisionInfo, &outVersion, &outRevisionInfo, &hServer);
 	if (!NT_SUCCESS(status) && hServer != NULL)
 	{
@@ -140,6 +140,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 
 	do
 	{
+		// get domain name buffer
 		enumDomainStatus = SamrEnumerateDomainsInSamServer(hServer, &domainEnumerationContext, &pEnumDomainBuffer, 100, &domainCountReturned);
 		if (!NT_SUCCESS(enumDomainStatus) && enumDomainStatus != STATUS_MORE_ENTRIES)
 		{
@@ -155,6 +156,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 			if (wcscmp(sBuiltin, pEnumDomainBuffer->Buffer[i].Name.Buffer) == 0)
 				continue;
 
+			// get domain SID
 			status = SamrLookupDomainInSamServer(hServer, &pEnumDomainBuffer->Buffer[i].Name, &domainSID);
 			if (!NT_SUCCESS(status))
 			{
@@ -165,6 +167,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 			else
 				wprintf(L"[*] SamrLookupDomainInSamServer success.\n");
 
+			// get domain handle
 			status = SamrOpenDomain(hServer, DOMAIN_LOOKUP, domainSID, &hDomain);
 			if (!NT_SUCCESS(status))
 			{
@@ -174,6 +177,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 			else
 				wprintf(L"[*] SamrOpenDomain success.\n");
 
+			// get user's RID
 			status = SamrLookupNamesInDomain(hDomain, 1, &uUserName[0], &ridBuffer, &useBuffer);
 			if (!NT_SUCCESS(status))
 			{
@@ -187,7 +191,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 			}
 
 
-
+			// get user handle
 			status = SamrOpenUser(hDomain, USER_CHANGE_PASSWORD, RID, &hUser);
 			if (!NT_SUCCESS(status))
 			{
@@ -199,6 +203,9 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 				wprintf(L"[*] SamrOpenUser success.\n");
 			}
 
+
+			// https://doxygen.reactos.org/d2/de6/samlib_8c_source.html
+			// Notice: we use emtpy-password's LM hash as new LM to be encrypted by new NT
 			unsigned char newLM[16];
 			PCWCHAR newLMHash = "AAD3B435B51404EEAAD3B435B51404EE";
 			StringToHex(newLMHash, newLM, sizeof(newLM));
@@ -209,7 +216,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 				exit(1);
 			}
 
-
+			// Encrypt the old NT hash with the new NT hash
 			status = RtlEncryptLmOwfPwdWithLmOwfPwd(oldNT, newNT, &OldNtEncryptedWithNewNt);
 			if (!NT_SUCCESS(status))
 			{
@@ -217,7 +224,7 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 				exit(1);
 			}
 
-
+			// Encrypt the new NT hash with the old NT hash
 			status = RtlEncryptLmOwfPwdWithLmOwfPwd(newNT, oldNT, &NewNtEncryptedWithOldNt);
 			if (!NT_SUCCESS(status))
 			{
@@ -225,6 +232,11 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 				exit(1);
 			}
 
+			/*
+			* If you don't specify LMCross and NewLMEncryptedWithNewNT you will get an error code: 0xC000017F
+			* 
+			* https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-samr/9699d8ca-e1a4-433c-a8c3-d7bebeb01476
+			*/
 			status = SamrChangePasswordUser(hUser, FALSE, NULL, NULL, TRUE, &OldNtEncryptedWithNewNt, &NewNtEncryptedWithOldNt, FALSE, NULL, TRUE, &NewLMEncryptedWithNewNT);
 
 			if (NT_SUCCESS(status))
@@ -251,10 +263,15 @@ NTSTATUS ChangeNTLM(PSAMPR_SERVER_NAME uServerName, RPC_UNICODE_STRING* uUserNam
 
 int main()
 {
-
+	/*
+	*  Information you must change:
+	*    1. Your Domain's Netbios
+	*    2. Username to change password
+	*    3. Old NTLM Hash
+	*    4. New NTLM Hash
+	*/
 	PSAMPR_SERVER_NAME serverName = L"TESTDC1";
 	wchar_t username[] = L"test2";
-	DWORD rid = 2106;
 	unsigned char oldNT[16];
 	unsigned char newNT[16];
 
